@@ -15,15 +15,9 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-/*
- * zx_col.h
- * Open/parse .col (ZX 80/81 colorization) files
- *
- */
+#ifndef C64_FILES_H
+#define C64_FILES_H
 
-#ifndef COL_FILE_H
-#define COL_FILE_H
+void c64files_init();
 
-void zx_init();
-
-#endif // COL_FILE_H
+#endif // C64_FILES_H

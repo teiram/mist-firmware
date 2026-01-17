@@ -35,6 +35,7 @@
 #ifdef HAVE_HDMI
 #include "it6613/HDMI_TX.h"
 #endif
+#include "serial_sink.h"
 
 // up to 16 key can be remapped
 #define MAX_REMAP  16
@@ -66,7 +67,7 @@ extern char rom_direct_upload;
 static uint32_t core_features = 0;
 
 // core variant (mostly for arcades)
-static char core_mod = 0;
+static int64_t core_mod = 0;
 
 // keep state of caps lock
 static char caps_lock_toggle = 0;
@@ -234,13 +235,14 @@ static void user_io_read_core_name() {
 	iprintf("Core name from FPGA is \"%s\"\n", core_name);
 }
 
-void user_io_set_core_mod(char mod) {
+void user_io_set_core_mod(int64_t mod) {
 	core_mod = mod;
 }
 
 static void user_io_send_core_mod() {
 	iprintf("Sending core mod = %d\n", core_mod);
-	spi_uio_cmd8(UIO_SET_MOD, core_mod);
+	spi_uio_cmd8(UIO_SET_MOD, core_mod & 0x7f);
+	spi_uio_cmd64(UIO_SET_MOD2, core_mod);
 }
 
 void user_io_send_rtc(void) {
@@ -1473,23 +1475,25 @@ void user_io_poll() {
 
 		// check for serial data to be sent
 
-		// check for incoming serial data. this is directly forwarded to the
-		// arm rs232 and mixes with debug output.
+		// check for incoming serial data.
 		spi_uio_cmd_cont(UIO_SIO_IN);
-		// status byte is 1000000A with A=1 if data is available
-		if((f = spi_in(0)) == 0x81) {
-			iprintf("\033[1;36m");
+		// status byte is 1000xxxA with A=1 if data is available
+		// xxx is the channel
+		if (((f = spi_in()) & 0x81) == 0x81) {
+			uint8_t channel = (f >> 1) & 0x07;
+			uint8_t lastf = f;
+			serial_sink_t *sink = serial_sink_get(channel);
+			if (sink) {
+				if (sink->begin) sink->begin();
+				while (f == lastf && p < sink->burst) {
+					c = spi_in();
+					sink->process_data(c);
 
-			// character 0xff is returned if FPGA isn't configured
-			while((f == 0x81) && (c!= 0xff) && (c != 0x00) && (p < 8)) {
-				c = spi_in();
-				if(c != 0xff && c != 0x00) 
-					iprintf("%c", c);
-
-				f = spi_in();
-				p++;
+					f = spi_in();
+					p++;
+				}
+				if (sink->end) sink->end();
 			}
-			iprintf("\033[0m");
 		}
 		DisableIO();
 	}
