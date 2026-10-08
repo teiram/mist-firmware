@@ -15,20 +15,10 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#ifndef MENU_8BIT_H
-#define MENU_8BIT_H
+#ifndef IDX_FILES_H
+#define IDX_FILES_H
 
-#define MAX_PAGE_PLUGINS 10
+// Initialize the IDX file processor (registers with data_io)
+void idx_files_init(void);
 
-typedef struct {
-    char id[4];
-    void (*init_menu)(const char *arg1, const char *arg2);
-} menu_page_plugin_t;
-
-void page_plugin_init();
-char page_plugin_add(menu_page_plugin_t *plugin);
-
-
-void Setup8bitMenu();
-
-#endif
+#endif // IDX_FILES_H

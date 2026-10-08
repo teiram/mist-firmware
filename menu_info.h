@@ -15,9 +15,9 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#ifndef C64_FILES_H
-#define C64_FILES_H
+#ifndef MENU_INFO_H
+#define MENU_INFO_H
 
-void c64files_init();
+void menu_info_open(const char *core_id);
 
-#endif // C64_FILES_H
+#endif // MENU_INFO_H

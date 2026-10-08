@@ -51,11 +51,12 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "menu.h"
 #include "user_io.h"
 #include "data_io.h"
-#include "c64files.h"
+#include "idx_files.h"
 #include "snes.h"
 #include "zx_col.h"
 #include "arc_file.h"
 #include "serial_sink.h"
+#include "menu-8bit.h"
 #include "font.h"
 #include "tos.h"
 #include "usb.h"
@@ -146,7 +147,8 @@ int main(void)
     DISKLED_ON;
 
     data_io_init();
-    c64files_init();
+    page_plugin_init();
+    idx_files_init();
     snes_init();
     zx_init();
     serial_sink_init();
