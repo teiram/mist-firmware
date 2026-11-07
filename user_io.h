@@ -107,6 +107,7 @@
 #define FEAT_HDMI       0x04000 // HDMI output
 #define FEAT_PSX        0x08000 // PSX-specific CD image handling
 #define FEAT_MEGACD     0x10000 // MegaCD specific CD image handling
+#define FEAT_SATURN     0x20000 // Saturn virtual CD drive (saturn.c)
 
 #define JOY_RIGHT       0x01
 #define JOY_LEFT        0x02
@@ -218,6 +219,8 @@ char user_io_dip_switch1(void);
 char user_io_serial_status(serial_status_t *, uint8_t);
 char user_io_is_mounted(unsigned char index);
 void user_io_file_mount(const unsigned char*, unsigned char);
+int user_io_file_is_mounted(const FIL *f);   // 1 if f is the same file as a currently mounted disk image
+int user_io_raw_sd_in_use(void);             // 1 if the core has accessed the raw SD card since it was loaded
 char user_io_is_cue_mounted();
 char user_io_cue_mount(const unsigned char*, unsigned char);
 char *user_io_get_core_name();

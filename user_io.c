@@ -12,6 +12,9 @@
 #include "pcecd.h"
 #include "neocd.h"
 #include "megacd.h"
+#ifdef HAVE_SATURN
+#include "saturn.h"
+#endif
 #include "psx.h"
 #include "hdd.h"
 #include "cdc_control.h"
@@ -45,6 +48,7 @@ unsigned char key_remap_table[MAX_REMAP][2];
 #define BREAK  0x8000
 
 static char umounted; // 1st image is file or direct SD?
+static char raw_sd_used; // the core has accessed the raw SD card (no image in slot 0) since it was loaded
 static char cache_buffer[1024];
 static uint8_t buffer_drive_index = 0;
 static uint32_t buffer_lba = 0xffffffff;
@@ -286,6 +290,7 @@ static void user_io_read_core_features() {
 
 void user_io_detect_core_type() {
 	core_name[0] = 0;
+	raw_sd_used = 0;
 
 	EnableIO();
 	core_type = SPI(0xff);
@@ -382,6 +387,9 @@ void user_io_init_core() {
 			}
 		}
 
+#ifdef HAVE_SATURN
+		if (core_features & FEAT_SATURN) saturn_init();
+#endif
 		// check if there's a <core>.rom or <core>.r0[1-6] present, send it via index 0-6
 		for (int i = 0; i < 7; i++) {
 			char ext[4];
@@ -795,13 +803,27 @@ static void kbd_fifo_poll() {
 
 
 char user_io_is_cue_mounted() {
+#ifdef HAVE_SATURN
+	if ((core_type == CORE_TYPE_8BIT) && (core_features & FEAT_SATURN))
+		return saturn_cue_mounted();
+#endif
 	return toc.valid;
 }
 
 char user_io_cue_mount(const unsigned char *name, unsigned char index) {
 	char res = CUE_RES_OK;
+#ifdef HAVE_SATURN
+	// Saturn: own virtual CD drive and .sav handling, see saturn.c (CUE parsed by cue_parser.c)
+	if ((core_type == CORE_TYPE_8BIT) && (core_features & FEAT_SATURN))
+		return saturn_cue_mount((const char*)name);
+#endif
 	toc.valid = 0;
 	if (name) {
+#ifdef CUE_MULTI_FILE
+		// multi-.bin CUEs for the readers that use cue_track_file()
+		cue_set_aux_image(NULL);
+		cue_set_multi_file((core_type == CORE_TYPE_8BIT) && (core_features & (FEAT_PSX | FEAT_MEGACD)));
+#endif
 		res = cue_parse(name, &sd_image[index]);
 	}
 #ifdef HAVE_PSX
@@ -838,6 +860,32 @@ static inline char sd_index(unsigned char index) {
 
 char user_io_is_mounted(unsigned char index) {
 	return sd_image[sd_index(index)].valid;
+}
+
+// true if 'f' (opened by someone else, e.g. the FTP server) is one of the files currently
+// mounted as a disk image for the core; compared by first cluster on the same volume
+int user_io_file_is_mounted(const FIL *f) {
+	if (!f->obj.sclust) return 0;
+	for (int i = 0; i < 4; i++) {
+		if (sd_image[i].valid &&
+		    sd_image[i].file.obj.fs == f->obj.fs &&
+		    sd_image[i].file.obj.sclust == f->obj.sclust) return 1;
+	}
+	// CD images (S..C entries) are opened by cue_parse() into an sd_image slot without setting .valid
+#ifdef CUE_MULTI_FILE
+	if (toc.valid && cue_file_is_open(f)) return 1;
+#else
+	if (toc.valid && toc.file &&
+	    toc.file->file.obj.fs == f->obj.fs &&
+	    toc.file->file.obj.sclust == f->obj.sclust) return 1;
+#endif
+	return 0;
+}
+
+// true if the core uses the SD card directly (its own filesystem code and caches): the firmware
+// must not change the card's filesystem behind its back
+int user_io_raw_sd_in_use(void) {
+	return raw_sd_used;
 }
 
 void user_io_file_mount(const unsigned char *name, unsigned char index) {
@@ -1250,6 +1298,7 @@ static bool user_io_read_sd(uint8_t drive_index, uint8_t *buffer, uint8_t buffer
 	// block size in bytes == 512<<blksize
 	//iprintf("%s drive_index: %d buffer_size: %d lba: %d blocks: %d blksz: %d send: %d\n", __FUNCTION__, drive_index, buffer_size, lba, blocks, blksz, sendtofpga);
 	bool retval = false;
+	FRESULT res;
 	DISKLED_ON
 	if (sendtofpga) {
 		spi_uio_cmd_cont(UIO_SECTOR_RD);
@@ -1257,13 +1306,20 @@ static bool user_io_read_sd(uint8_t drive_index, uint8_t *buffer, uint8_t buffer
 	while (blocks) {
 		uint8_t blockstoread = MIN(blocks, buffer_size>>blksz);
 		if(sd_image[sd_index(drive_index)].valid) {
-			UINT br;
-			if( (f_size(&sd_image[sd_index(drive_index)].file) >> (9+blksz)) >= (lba+blockstoread) ) {
+			UINT br, btr;
+			if( (f_size(&sd_image[sd_index(drive_index)].file) >> (9+blksz)) >= lba ) {
 				IDXSeek(&sd_image[sd_index(drive_index)], lba<<blksz);
-				f_read(&sd_image[sd_index(drive_index)].file, buffer, blockstoread << (9+blksz), &br);
+				btr = blockstoread << (9+blksz);
+				res = f_read(&sd_image[sd_index(drive_index)].file, buffer, btr, &br);
+				//pad partial reads with 0
+				if (res == FR_OK && br < btr) {
+					memset(buffer + br, 0, btr-br);
+					iprintf("Reading beyond file end (lba: %d - %d bytes)\n", lba, btr-br);
+				}
 				retval = true;
 			}
 		} else if (!drive_index && !umounted) {
+			raw_sd_used = 1;
 			disk_read(fs.pdrv, buffer, lba, blockstoread << blksz);
 			retval = true;
 		}
@@ -1551,6 +1607,10 @@ void user_io_poll() {
 		pcecd_poll();
 	if((core_type == CORE_TYPE_8BIT) && (core_features & FEAT_NEOCD))
 		neocd_poll();
+#ifdef HAVE_SATURN
+	if((core_type == CORE_TYPE_8BIT) && (core_features & FEAT_SATURN))
+		saturn_poll();
+#endif
 #ifdef HAVE_MEGACD
 	if((core_type == CORE_TYPE_8BIT) && (core_features & FEAT_MEGACD))
 		megacd_poll();
@@ -1634,11 +1694,18 @@ void user_io_poll() {
 #if 1
 						if(sd_image[sd_index(drive_index)].valid) {
 							UINT bw;
-							if( (f_size(&sd_image[sd_index(drive_index)].file) >> (9+blksz)) >= (lba+blockstowrite) ) {
+							FSIZE_t fs = f_size(&sd_image[sd_index(drive_index)].file);
+							if( (fs >> (9+blksz)) >= lba ) {
+								UINT btw = blockstowrite << (9+blksz);
+								FSIZE_t write_start = lba << (9+blksz);
+								FSIZE_t write_max = fs - write_start;
+								if (btw > write_max) iprintf("Write truncated to %llu bytes\n", write_max);
+								btw = MIN(write_max, btw);
 								IDXSeek(&sd_image[sd_index(drive_index)], lba<<blksz);
-								f_write(&sd_image[sd_index(drive_index)].file, sector_buffer, blockstowrite << (9+blksz), &bw);
+								f_write(&sd_image[sd_index(drive_index)].file, sector_buffer, btw, &bw);
 							}
 						} else if (!drive_index && !umounted) {
+							raw_sd_used = 1;
 							disk_write(fs.pdrv, sector_buffer, lba, blockstowrite << blksz);
 						}
 #else
